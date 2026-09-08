@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const DB_PATH =
@@ -8,3 +9,5 @@ const DB_PATH =
 export const db = new Database(DB_PATH);
 
 db.pragma("foreign_keys = ON");
+
+db.exec(readFileSync(new URL("schema.sql", import.meta.url), "utf8"));

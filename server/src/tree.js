@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import * as store from "./data/store.js";
+import { increment } from "./metrics.js";
 
 // Walks up from the proposed parent. Returns the path, child first, when the
 // new edge would close a loop, or null when the edge is safe.
@@ -37,63 +38,8 @@ export function addPerson({ name, birthYear = null, confirmDuplicate = false }) 
 
   const id = randomUUID();
   store.insertPerson(id, cleanName, birthYear);
+  increment("tree_people_total");
   return { ok: true, person: { id, name: cleanName, birthYear } };
-}
-
-export const addParentEdge = store.transaction((childId, parentId) => {
-  const child = store.personById(childId);
-  const parent = store.personById(parentId);
-  if (!child) return { ok: false, error: `No person has the id ${childId}.` };
-  if (!parent) return { ok: false, error: `No person has the id ${parentId}.` };
-  if (childId === parentId) {
-    return { ok: false, error: `${child.name} cannot be the parent of ${child.name}.` };
-  }
-
-  // Before the limit below, so a repeated turn about a child who already has
-  // two parents is a no-op and not a refusal.
-  if (store.hasParentEdge(childId, parentId)) return { ok: true, created: false };
-
-  const parents = store.parentIdsOf(childId).map(store.personById);
-  if (parents.length >= 2) {
-    return {
-      ok: false,
-      error: `${child.name} already has two parents: ${parents.map((p) => p.name).join(" and ")}. Ask the user which one ${parent.name} replaces.`,
-      parents,
-    };
-  }
-
-  const cycle = cyclePath(childId, parentId);
-  if (cycle) {
-    const path = cycle.map((id) => store.personById(id).name);
-    return {
-      ok: false,
-      error: `${child.name} is already an ancestor of ${parent.name} (${path.join(" > ")}). This edge would make a loop.`,
-      path,
-    };
-  }
-
-  store.insertParentEdge(childId, parentId);
-  return { ok: true, created: true };
-});
-
-export const addSpouseEdge = store.transaction((personAId, personBId) => {
-  const personA = store.personById(personAId);
-  const personB = store.personById(personBId);
-  if (!personA) return { ok: false, error: `No person has the id ${personAId}.` };
-  if (!personB) return { ok: false, error: `No person has the id ${personBId}.` };
-  if (personAId === personBId) {
-    return { ok: false, error: `${personA.name} cannot be the spouse of ${personA.name}.` };
-  }
-
-  return { ok: true, created: store.insertSpouseEdge(personAId, personBId) };
-});
-
-export function readGraph() {
-  return {
-    people: store.allPeople(),
-    parentEdges: store.allParentEdges(),
-    spouseEdges: store.allSpouseEdges(),
-  };
 }
 
 // Anyone who shares a parent, minus the person. The map drops the repeat when
@@ -124,3 +70,142 @@ export function findPerson(name) {
 
   return { matchCount: candidates.length, candidates };
 }
+
+export const addParentEdge = store.transaction((childId, parentId) => {
+  const child = store.personById(childId);
+  const parent = store.personById(parentId);
+  if (!child) return { ok: false, error: `No person has the id ${childId}.` };
+  if (!parent) return { ok: false, error: `No person has the id ${parentId}.` };
+  if (childId === parentId) {
+    return { ok: false, error: `${child.name} cannot be the parent of ${child.name}.` };
+  }
+
+  // Before the limit below, so a repeated turn about a child who already has
+  // two parents is a no-op and not a refusal.
+  if (store.hasParentEdge(childId, parentId)) return { ok: true, created: false };
+
+  const parents = store.parentIdsOf(childId).map(store.personById);
+  if (parents.length >= 2) {
+    return {
+      ok: false,
+      error: `${child.name} already has two parents: ${parents.map((p) => p.name).join(" and ")}. Ask the user which one ${parent.name} replaces.`,
+      parents,
+    };
+  }
+
+  const cycle = cyclePath(childId, parentId);
+  if (cycle) {
+    increment("tree_cycles_rejected_total");
+    const path = cycle.map((id) => store.personById(id).name);
+    return {
+      ok: false,
+      error: `${child.name} is already an ancestor of ${parent.name} (${path.join(" > ")}). This edge would make a loop.`,
+      path,
+    };
+  }
+
+  store.insertParentEdge(childId, parentId);
+  increment("tree_edges_parent_total");
+  return { ok: true, created: true };
+});
+
+export const addSpouseEdge = store.transaction((personAId, personBId) => {
+  const personA = store.personById(personAId);
+  const personB = store.personById(personBId);
+  if (!personA) return { ok: false, error: `No person has the id ${personAId}.` };
+  if (!personB) return { ok: false, error: `No person has the id ${personBId}.` };
+  if (personAId === personBId) {
+    return { ok: false, error: `${personA.name} cannot be the spouse of ${personA.name}.` };
+  }
+
+  const created = store.insertSpouseEdge(personAId, personBId);
+  if (created) increment("tree_edges_spouse_total");
+  return { ok: true, created };
+});
+
+export function readGraph() {
+  return {
+    people: store.allPeople(),
+    parentEdges: store.allParentEdges(),
+    spouseEdges: store.allSpouseEdges(),
+  };
+}
+
+export function renamePerson(personId, name) {
+  if (!store.personById(personId)) {
+    return { ok: false, error: `No person has the id ${personId}.` };
+  }
+
+  const cleanName = typeof name === "string" ? name.trim() : "";
+  if (cleanName === "") return { ok: false, error: "A person needs a name." };
+
+  store.renamePerson(personId, cleanName);
+  return { ok: true, person: store.personById(personId) };
+}
+
+// Thrown to roll the savepoint back when the new edge is refused, so a
+// replacement never leaves the child with one parent less.
+class Refused extends Error {
+  constructor(answer) {
+    super(answer.error);
+    this.answer = answer;
+  }
+}
+
+const replaceParentInOneGo = store.transaction((childId, oldParentId, newParentId) => {
+  const child = store.personById(childId);
+  if (!child) return { ok: false, error: `No person has the id ${childId}.` };
+  if (!store.hasParentEdge(childId, oldParentId)) {
+    return {
+      ok: false,
+      error: `${child.name} is not recorded as a child of the person with the id ${oldParentId}.`,
+    };
+  }
+
+  store.deleteParentEdge(childId, oldParentId);
+
+  // The old edge is gone first, or the two parent limit refuses the new one.
+  const answer = addParentEdge(childId, newParentId);
+  if (!answer.ok) throw new Refused(answer);
+  return answer;
+});
+
+export function replaceParent(childId, oldParentId, newParentId) {
+  try {
+    return replaceParentInOneGo(childId, oldParentId, newParentId);
+  } catch (error) {
+    if (error instanceof Refused) return error.answer;
+    throw error;
+  }
+}
+
+export function removeParentEdge(childId, parentId) {
+  return { ok: true, removed: store.deleteParentEdge(childId, parentId) };
+}
+
+export function removeSpouseEdge(personAId, personBId) {
+  return { ok: true, removed: store.deleteSpouseEdge(personAId, personBId) };
+}
+
+export const removePerson = store.transaction((personId, confirmRemoveEdges = false) => {
+  const person = store.personById(personId);
+  if (!person) return { ok: false, error: `No person has the id ${personId}.` };
+
+  const edges = {
+    parents: store.parentIdsOf(personId).map(store.personById),
+    children: store.childIdsOf(personId).map(store.personById),
+    spouses: store.spouseIdsOf(personId).map(store.personById),
+  };
+  const count = edges.parents.length + edges.children.length + edges.spouses.length;
+
+  if (count > 0 && !confirmRemoveEdges) {
+    return {
+      ok: false,
+      error: `${person.name} is in ${count} recorded relations. Removing this person removes them too. Say so to the user, and call again with confirmRemoveEdges.`,
+      edges,
+    };
+  }
+
+  return { ok: true, removed: store.deletePerson(personId) };
+});
+

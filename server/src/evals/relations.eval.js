@@ -4,7 +4,7 @@ import { beforeEach, test } from "node:test";
 process.env.DATABASE_PATH = ":memory:";
 
 const { readGraph } = await import("../tree.js");
-const { db } = await import("../db.js");
+const { db } = await import("../data/db.js");
 const { sendMessage } = await import("./eval-helpers.js");
 
 beforeEach(() => db.exec("DELETE FROM people; DELETE FROM parent_of; DELETE FROM spouse_of;"));
