@@ -67,11 +67,17 @@ export async function getChatReply(messages) {
       { role: "assistant", content: response.content },
       {
         role: "user",
-        content: toolUseBlocks.map((block) => ({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: JSON.stringify(runTool(block.name, block.input)),
-        })),
+        content: toolUseBlocks.map((block) => {
+          console.error(`[agent] -> ${block.name} ${JSON.stringify(block.input)}`);
+          const result = runTool(block.name, block.input);
+          console.error(`[agent] <- ${JSON.stringify(result)}`);
+
+          return {
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: JSON.stringify(result),
+          };
+        }),
       },
     ];
   }
