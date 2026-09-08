@@ -6,7 +6,12 @@
   "main": "src/index.js",
   "scripts": {
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test",
+    "eval": "node --require dotenv/config --test 'src/evals/*.eval.js'",
+    "eval:ambiguity": "node --require dotenv/config --test 'src/evals/ambiguity.eval.js'",
+    "eval:dag": "node --require dotenv/config --test 'src/evals/dag-validation.eval.js'",
+    "eval:relations": "node --require dotenv/config --test 'src/evals/relations.eval.js'"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

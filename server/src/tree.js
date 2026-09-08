@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import * as store from "./store.js";
+import * as store from "./data/store.js";
 
 // Walks up from the proposed parent. Returns the path, child first, when the
 // new edge would close a loop, or null when the edge is safe.

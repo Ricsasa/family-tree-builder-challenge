@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 
-// Set before the import below, because db.js opens the database as it loads.
+// load databasse
 process.env.DATABASE_PATH = ":memory:";
 
-const { db } = await import("./db.js");
+const { db } = await import("./data/db.js");
 const { addPerson, addParentEdge, addSpouseEdge, readGraph, renamePerson, replaceParent, removePerson, } = await import("./tree.js");
 
 const idOf = (name) => addPerson({ name, confirmDuplicate: true }).person.id;
@@ -54,9 +54,7 @@ test("addParentEdge writes nothing for a known edge", () => {
 
     assert.deepEqual(addParentEdge(child, mother), { ok: true, created: true });
     assert.deepEqual(addParentEdge(child, mother), { ok: true, created: false });
-
-    // Still a no-op once the child has two parents, so a repeated turn does not
-    // hit the two parent limit.
+    
     addParentEdge(child, father);
     assert.deepEqual(addParentEdge(child, mother), { ok: true, created: false });
     assert.equal(readGraph().parentEdges.length, 2);
