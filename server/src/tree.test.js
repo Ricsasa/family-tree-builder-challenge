@@ -73,3 +73,35 @@ test("readGraph returns the client contract", () => {
   assert.deepEqual(graph.parentEdges, [{ parentId: mother, childId: child }]);
   assert.equal(graph.spouseEdges.length, 1);
 });
+
+test("findPerson returns every person with that name and a match count", () => {
+  const older = addPerson({ name: "Juan", birthYear: 1970 }).person.id;
+  const younger = addPerson({ name: "Juan", birthYear: 1998, confirmDuplicate: true }).person.id;
+  addParentEdge(younger, older);
+
+  const answer = findPerson("Juan");
+  assert.equal(answer.matchCount, 2);
+  assert.deepEqual(answer.candidates.map((c) => c.id).sort(), [older, younger].sort());
+
+  const father = answer.candidates.find((c) => c.id === older);
+  assert.deepEqual(father.children.map((c) => c.name), ["Juan"]);
+  assert.deepEqual(father.parents, []);
+});
+
+test("findPerson returns the siblings that shared parents make", () => {
+  const [mother, father] = [addPerson({ name: "Maria" }), addPerson({ name: "Luis" })]
+    .map((answer) => answer.person.id);
+  const rosa = addPerson({ name: "Rosa" }).person.id;
+  const pedro = addPerson({ name: "Pedro" }).person.id;
+  for (const child of [rosa, pedro]) {
+    addParentEdge(child, mother);
+    addParentEdge(child, father);
+  }
+
+  const [candidate] = findPerson("Rosa").candidates;
+  assert.deepEqual(candidate.siblings.map((s) => s.name), ["Pedro"]);
+});
+
+test("findPerson answers a name nobody has with no matches", () => {
+  assert.deepEqual(findPerson("Nobody"), { matchCount: 0, candidates: [] });
+});

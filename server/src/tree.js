@@ -26,12 +26,12 @@ export function addPerson({ name, birthYear = null, confirmDuplicate = false }) 
   const cleanName = typeof name === "string" ? name.trim() : "";
   if (cleanName === "") return { ok: false, error: "A person needs a name." };
 
-  const namesakes = store.peopleNamed(cleanName);
-  if (namesakes.length > 0 && !confirmDuplicate) {
+  const existing = store.peopleNamed(cleanName);
+  if (existing.length > 0 && !confirmDuplicate) {
     return {
       ok: false,
-      error: `The tree already holds ${namesakes.length} ${namesakes.length === 1 ? "person" : "people"} with the name ${cleanName}. Ask the user if this is the same person. To add another one, call again with confirmDuplicate.`,
-      namesakes,
+      error: `The tree already holds ${existing.length} ${existing.length === 1 ? "person" : "people"} with the name ${cleanName}. Ask the user if this is the same person. To add another one, call again with confirmDuplicate.`,
+      existing,
     };
   }
 
@@ -94,4 +94,33 @@ export function readGraph() {
     parentEdges: store.allParentEdges(),
     spouseEdges: store.allSpouseEdges(),
   };
+}
+
+// Anyone who shares a parent, minus the person. The map drops the repeat when
+// two people share both parents.
+function siblingsOf(personId, parentIds) {
+  const siblings = new Map();
+  for (const parentId of parentIds) {
+    for (const childId of store.childIdsOf(parentId)) {
+      if (childId !== personId) siblings.set(childId, store.personById(childId));
+    }
+  }
+  return [...siblings.values()];
+}
+
+export function findPerson(name) {
+  const cleanName = typeof name === "string" ? name.trim() : "";
+
+  const candidates = store.peopleNamed(cleanName).map((person) => {
+    const parentIds = store.parentIdsOf(person.id);
+    return {
+      ...person,
+      parents: parentIds.map(store.personById),
+      children: store.childIdsOf(person.id).map(store.personById),
+      spouses: store.spouseIdsOf(person.id).map(store.personById),
+      siblings: siblingsOf(person.id, parentIds),
+    };
+  });
+
+  return { matchCount: candidates.length, candidates };
 }
