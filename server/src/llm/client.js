@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { toolDefinitions, runTool } from "../tools.js";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -6,32 +7,19 @@ const anthropic = new Anthropic({
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
 
-const SYSTEM_PROMPT = `You are a friendly assistant helping someone describe their family tree in conversation.
-Ask clarifying questions whenever a detail is ambiguous or missing.
-You are currently a plain conversational assistant — you have no way to record or persist
-what the user tells you yet. That piece is intentionally left unimplemented.`;
+const REQUEST_OPTIONS = { maxRetries: 2, timeout: 30_000 };
 
-const TOOLS = [
-  {
-    name: "add_person",
-    description: "Add a new person to the family tree.",
-    input_schema: {
-      type: "object",
-      properties: {
-        id: { type: "string" },
-        name: { type: "string" },
-      },
-      required: ["id", "name"],
-    },
-  }
-];
+const MAX_ROUND_TRIPS = 10;
 
-function runTool(name) {
-  if (name === "add_person") {
-    return "Person added successfully";
-  }
-  throw new Error(`Unknown tool: ${name}`);
-}
+const LIMIT_REPLY = `I stopped this turn after ten steps, because I kept working without
+reaching an answer. Anything I recorded is in the tree. Please tell me
+the same thing in smaller steps.`;
+
+const SYSTEM_PROMPT = `You help the user record their family tree in conversation.
+The tree is the truth. Answer a question about it from find_person, never from the conversation alone. After a write, tell the user what you recorded, in their own words.
+Never assume which person a name means. find_person is the only source of ids. If it returns no match, or more than one, ask the user which person they mean.
+These are out of scope: remarriage, half siblings, more than two parents, and unknown or missing parents. When the user brings one up, say plainly that the tree cannot record it, or ask a question. Never invent a person or a relation to fill the gap.
+Missing parents are the normal state, not a gap because a person with no recorded parent, or with one, is a correct tree. Only say the limitation when the user raises the unknown parent.`;
 
 /**
  * Sends a conversation to the model and returns its plain-text reply.
@@ -45,14 +33,17 @@ function runTool(name) {
 export async function getChatReply(messages) {
   let conversation = messages;
 
-  while (true) {
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      tools: TOOLS,
-      messages: conversation,
-    });
+  for (let roundTrip = 0; roundTrip < MAX_ROUND_TRIPS; roundTrip++) {
+    const response = await anthropic.messages.create(
+      {
+        model: MODEL,
+        max_tokens: 1024,
+        system: SYSTEM_PROMPT,
+        tools: toolDefinitions,
+        messages: conversation,
+      },
+      REQUEST_OPTIONS,
+    );
 
     const toolUseBlocks = response.content.filter((block) => block.type === "tool_use");
     if (toolUseBlocks.length === 0) {
@@ -68,9 +59,13 @@ export async function getChatReply(messages) {
         content: toolUseBlocks.map((block) => ({
           type: "tool_result",
           tool_use_id: block.id,
-          content: runTool(block.name),
+          content: JSON.stringify(runTool(block.name, block.input)),
         })),
       },
     ];
   }
+
+  counters.roundTripLimitCrossed += 1;
+  console.error(`[chat] the turn crossed ${MAX_ROUND_TRIPS} round trips`);
+  return LIMIT_REPLY;
 }
